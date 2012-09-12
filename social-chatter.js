@@ -146,6 +146,7 @@ Echo.Localization.extend({
 	"chatClosesIn": "VIP Chat closes in: ",
 	"chatOpensIn": "<b>Live chat starts in:</b> <br><br>",
 	"passedEventViewNotice": "<b>Note:</b> this event is over. You are viewing chat archive.",
+	"askQuestionViewNotice": "<b>Note:</b> You must be logged in to ask question",
 	"upcomingEventWarning": "Please login to join this event.",
 	"passedEventWarning": "Please login to view this chat archive.",
 	"onAirEventWarning": "<b>Chat is on air now!</b> <br><br> Please login to join the conversation!"
@@ -200,7 +201,7 @@ Echo.SocialChatterView.prototype.templates.event = {
 					'<div class="echo-socialchatter-view-publicStream"></div>' +
 				'</div></td>' +
 				'<td class="echo-socialchatter-view-rightColumnTD"><div class="echo-socialchatter-view-rightColumn">' +
-					'<div class="echo-socialchatter-view-publicSubmitLabel">{Label:answersFrom} {Data:vipName}</div>' +
+					'<div class="echo-socialchatter-view-publicSubmitVIPLabel">{Label:answersFrom} {Data:vipName}</div>' +
 					'{Self:templateChunk}' +
 					'<div class="echo-socialchatter-view-vipStream"></div>' +
 				'</div></td>' +
@@ -224,7 +225,7 @@ Echo.SocialChatterView.prototype.templates.greenRoom =
 Echo.SocialChatterView.prototype.template = function() {
 	var status = this.event.getEventStatus && this.event.getEventStatus();
 	if (this.type == "event") {
-		return this.templates[this.type][this.user && this.user.logged()
+		return this.templates[this.type][this.hasPublicEventAccess()
 			? (status && status != "upcoming" ? "full" :"upcoming")
 			: "anonymous"];
 	}
@@ -241,6 +242,8 @@ Echo.SocialChatterView.prototype.renderers.publicViewNotice = function(element) 
 	var status = this.event.getEventStatus();
 	if (status == "passed") {
 		return '<span>' + this.label("passedEventViewNotice") + '</span>';
+	} else if (!this.userIsLogged()) {
+		return '<span>' + this.label("askQuestionViewNotice") + '</span>';
 	}
 	element.hide();
 };
@@ -297,6 +300,14 @@ Echo.SocialChatterView.prototype.renderers.eventSubmitLabel = function(element, 
 	}
 };
 
+Echo.SocialChatterView.prototype.userIsLogged = function() {
+	return this.user && this.user.logged();
+};
+
+Echo.SocialChatterView.prototype.hasPublicEventAccess = function() {
+	return this.config.get("permissions.access") === "allowGuest" || this.userIsLogged();
+};
+
 })(jQuery);
 
 (function($) {
@@ -332,6 +343,9 @@ Echo.SocialChatter = function(config) {
 		"liveUpdates": true,
 		"liveUpdatesTimeout": 60, // request Events updates once per minute
 		"identityManager": undefined,
+		"permissions": {
+			"access": "allowGuest"
+		},
 		"views": {}
 	}, {
 		"views": function(viewsConfig) {
@@ -368,8 +382,9 @@ Echo.SocialChatter = function(config) {
 				};
 			}, function(data) { self.handleLiveUpdatesResponse(data); });
 			self.requestEventList(function(data) {
+				data.entries = data.entries || [];
 				self.initSocialChatterEvents(data.entries);
-				self.setPublicEvent(self.pickRelevantEvent(data.entries));
+				self.setPublicEvent(self.pickRelevantEvent());
 				self.config.get("target").empty().append(self.render());
 				self.initTabs();
 				self.config.set("apps.Stream.EventList.data", data);
@@ -652,12 +667,11 @@ Echo.SocialChatter.prototype.updateTabs = function() {
 	});
 };
 
-Echo.SocialChatter.prototype.pickRelevantEvent = function(entries) {
+Echo.SocialChatter.prototype.pickRelevantEvent = function() {
 	// we need to pick one most relevant event:
 	//  - look for event which is on air right now
 	//  - otherwise grab first upcoming event
 	//  - if there are no upcoming or on air events - return undefined
-	if (entries && !entries.length) return;
 	var relevantEvent;
 	$.each(this.eventById, function(id, event) {
 		var status = event.getEventStatus();
@@ -675,6 +689,10 @@ Echo.SocialChatter.prototype.pickRelevantEvent = function(entries) {
 
 Echo.SocialChatter.prototype.classifyAction = function(entry) {
 	return (entry.verbs[0] == "http://activitystrea.ms/schema/1.0/delete") ? "delete" : "post";
+};
+
+Echo.SocialChatter.prototype.hasPublicEventAccess = function() {
+	return this.config.get("permissions.access") === "allowGuest" || this.user.logged();
 };
 
 Echo.SocialChatter.prototype.handleLiveUpdatesResponse = function(data) {
@@ -706,7 +724,7 @@ Echo.SocialChatter.prototype.handleLiveUpdatesResponse = function(data) {
 				if ((self.event && self.event.id == event.id) ||
 					(!self.event && (status == "onAir" || status == "upcoming"
 ))) {
-					self.setPublicEvent(self.pickRelevantEvent(data.entries));
+					self.setPublicEvent(self.pickRelevantEvent());
 					self.updateTabs();
 				}
 				break;
@@ -852,21 +870,24 @@ Echo.SocialChatter.prototype.assemblers.EventList = function(target) {
 Echo.SocialChatter.prototype.assemblers.PublicEvent = function(target, ui) {
 	var self = this;
 	var data = this.event.data;
-	var pluginEnabled = !(this.event && this.event.getEventStatus() == "passed");
+	var pluginEnabled = !(this.event && this.event.getEventStatus() == "passed") && this.user.logged();
 	var view = new Echo.SocialChatterView({
 		"user": this.user,
 		"data": data,
 		"target": target,
-		"type": "event"
+		"type": "event",
+		"config": {
+			"permissions": this.config.get("permissions")
+		}
 	});
 	var content = view.render();
 	// setting tab title
 	$(ui.tab).html(data.eventName || "Unknown Event");
-	if (!this.user.logged() || this.event.getEventStatus() == "upcoming") {
+	if (!this.hasPublicEventAccess() || this.event.getEventStatus() == "upcoming") {
 		$(target).append(content);
 		return;
 	}
-	if (this.event.onAir()) 
+	if (this.event.onAir() && this.user.logged()) {
 		this.initInternalApplication({
 			"view": "PublicEvent",
 			"name": "Submit",
@@ -874,6 +895,10 @@ Echo.SocialChatter.prototype.assemblers.PublicEvent = function(target, ui) {
 		}, {
 			"target": view.dom.get("publicSubmit")
 		});
+        view.dom.get("publicSubmitLabel").show();
+	} else if( !this.user.logged() ) {
+		view.dom.get("publicSubmitLabel").hide();
+	}
 	this.initInternalApplication({
 		"view": "PublicEvent",
 		"name": "Stream",
@@ -1015,7 +1040,7 @@ Echo.SocialChatter.prototype.refresh = function() {
 	this.destroyInternalApplications([{"view": "Main", "name": "Auth"}]);
 	this.requestEventList(function(data) {
 		self.initSocialChatterEvents(data.entries);
-		self.setPublicEvent(self.pickRelevantEvent(data.entries));
+		self.setPublicEvent(self.pickRelevantEvent());
 		self.config.get("target").empty().append(self.render());
 		self.initTabs();
 	});
@@ -1077,7 +1102,7 @@ Echo.SocialChatter.prototype.addCss = function() {
 		'.echo-socialchatter-view-leftColumnTD { width: 40%; vertical-align: top; }' +
 		'.echo-socialchatter-view-rightColumnTD { width: 60%; vertical-align: top; }' +
 		'.echo-socialchatter-view-rightColumn { margin: 0 10px; border: 1px solid #D3D3D3; padding: 15px 10px 15px 20px; border-radius: 4px; -webkit-box-shadow: 0 1px 2px rgba(0,0,0,.2); -moz-box-shadow: 0 1px 2px rgba(0,0,0,.2); box-shadow: 0 1px 2px rgba(0,0,0,.2); }' +
-		'.echo-socialchatter-view-publicSubmitLabel { font-weight: bold; font-size: 16px; margin-bottom: 10px; }' +
+		'.echo-socialchatter-view-publicSubmitLabel, .echo-socialchatter-view-publicSubmitVIPLabel { font-weight: bold; font-size: 16px; margin-bottom: 10px; }' +
 		'.echo-socialchatter-view-eventSubmitLabel { margin-top: 10px; cursor: pointer; font-weight: bold; font-size: 16px; }' +
 		'.echo-socialchatter-view-eventSubmit .echo-submit-post-container { float: left; margin-left: 7px; }' +
 		'.echo-socialchatter-view-eventSubmit .echo-submit-content { border: none; }' +
