@@ -353,14 +353,14 @@ Echo.SocialChatter = function(config) {
 			$.each(views, function(view, appConfigs) {
 				$.each(appConfigs, function(appName, appConfig) {
 					if (viewsConfig[view] && viewsConfig[view][appName] && viewsConfig[view][appName].plugins) {
-						views[view][appName].plugins = self.updateAppPlugins(
+						viewsConfig[view][appName].plugins = self.updateAppPlugins(
 							views[view][appName].plugins,
 							viewsConfig[view][appName].plugins
 						);
 					}
 				});
 			});
-			return views;
+			return $.extend(true, views, viewsConfig);
 		}
 	});
 	$.foldl(this.apps, this.config.get("views"), function(config, acc, name) {
